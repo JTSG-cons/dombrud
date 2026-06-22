@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Dombrud</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  body { font-family: ui-rounded, "Segoe UI", system-ui, sans-serif; background:#fffbeb; }
+  @keyframes wobble{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+  ::-webkit-scrollbar{height:6px;width:6px}::-webkit-scrollbar-thumb{background:#fdba74;border-radius:6px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+// ---- Supabase connection ----
+const SB_URL = "https://whpyqjybyffipbepxppa.supabase.co";
+const SB_KEY = "sb_publishable_-RpPxVKkibHBFDESrad4UA_y8Om5__m";
+const sb = supabase.createClient(SB_URL, SB_KEY);
+
+const GROUP_NAME = "Dombrud";
+const PASSCODE = "Yr_n_Iishegiig_boodog_bolgogohod_chuluu_nogoo_hutga_heregtei";
+
+const REJECTIONS = [
+  "Nope. Not even close. Embarrassing, honestly.",
+  "Wrong. The door remains shut. The vibes remain locked.",
+  "Access denied. You absolute impostor.",
+  "That's not it. Did you even read the group chat?",
+  "Incorrect. Security has been notified (it's just us laughing).",
+  "Hmm no. Try remembering instead of guessing.",
+  "Denied. This is a members-only catastrophe.",
+];
+
+const CHAOS = [
+  "Everyone reveal the last photo in your camera roll. No skips. No deleting.",
+  "Who would survive a zombie apocalypse the longest? Defend yourself in 1 sentence.",
+  "Rank the group by who'd cry first in a horror movie. Be honest. Be cruel.",
+  "Drop your most controversial food opinion RIGHT NOW.",
+  "Who's most likely to get famous, and who's most likely to go to jail? Same person allowed.",
+  "Confess one cursed thing you did this week. We won't judge (we will).",
+  "If the group started a band, what's the name and who's the dramatic lead singer?",
+  "Vote: who has the worst music taste? Loser picks the next hangout.",
+  "Send a voice note doing your best impression of someone in this group.",
+  "Who would you trust with your phone unlocked for 24 hours? Who absolutely not?",
+  "Pitch a business idea in 10 words. The group invests imaginary money.",
+  "Whose contact name for you is the funniest? Reveal it.",
+  "If we got stranded on an island, who's the first to get voted off? Why.",
+  "Describe the group as a zoo exhibit. One animal per person.",
+];
+
+const EMOJIS = ["😎","🦝","👑","🤡","🥷","🐉","🍄","👻","🦄","🐧","🔥","🌮","🦖","🫠","🪩","🧃","🐙","💀"];
+const QCOLORS = ["bg-yellow-100","bg-pink-100","bg-green-100","bg-blue-100","bg-orange-100","bg-purple-100"];
+const WHEEL_COLORS = ["#f43f5e","#fb923c","#facc15","#4ade80","#22d3ee","#818cf8","#e879f9","#fb7185","#34d399"];
+
+const rememberName = (n) => { try { localStorage.setItem("dombrud_name", n); } catch(e){} };
+const getName = () => { try { return localStorage.getItem("dombrud_name") || ""; } catch(e){ return ""; } };
+
+// ---- data fetch ----
+async function fetchAll() {
+  const [roster, quotes, memories, bucket, polls, options, curRound, archRounds, answers, wheel, hangout] = await Promise.all([
+    sb.from("roster").select("*").order("ord"),
+    sb.from("quotes").select("*").order("created_at", { ascending: false }),
+    sb.from("memories").select("*").order("created_at", { ascending: false }),
+    sb.from("bucket").select("*").order("created_at", { ascending: false }),
+    sb.from("polls").select("*").order("created_at", { ascending: false }),
+    sb.from("poll_options").select("*").order("ord"),
+    sb.from("chaos_rounds").select("*").eq("is_current", true).limit(1),
+    sb.from("chaos_rounds").select("*").eq("is_current", false).order("created_at", { ascending: false }).limit(15),
+    sb.from("chaos_answers").select("*").order("created_at"),
+    sb.from("wheel_options").select("*").order("ord"),
+    sb.from("hangout").select("*").eq("id", 1).limit(1),
+  ]);
+  const ans = {};
+  (answers.data || []).forEach((a) => { (ans[a.round_id] = ans[a.round_id] || []).push(a); });
+  const cur = (curRound.data || [])[0];
+  const h = (hangout.data || [])[0] || { what: "", when_at: "", where_at: "" };
+  return {
+    roster: roster.data || [],
+    quotes: quotes.data || [],
+    memories: memories.data || [],
+    bucket: bucket.data || [],
+    polls: (polls.data || []).map((p) => ({ ...p, options: (options.data || []).filter((o) => o.poll_id === p.id) })),
+    currentChaos: cur ? { ...cur, answers: ans[cur.id] || [] } : null,
+    chaosArchive: (archRounds.data || []).map((r) => ({ ...r, answers: ans[r.id] || [] })).filter((r) => r.answers.length),
+    wheelOptions: wheel.data || [],
+    hangout: { what: h.what, when: h.when_at, where: h.where_at },
+  };
+}
+
+function App() {
+  const [unlocked, setUnlocked] = useState(false);
+  const [booting, setBooting] = useState(false);
+  const [room, setRoom] = useState("couch");
+  const [data, setData] = useState(null);
+
+  async function refresh() {
+    try { const d = await fetchAll(); setData(d); } catch (e) { console.error(e); }
+  }
+  async function unlock() {
+    setBooting(true);
+    await refresh();
+    setBooting(false);
+    setUnlocked(true);
+  }
+  useEffect(() => {
+    if (!unlocked) return;
+    const t = setInterval(refresh, 4000);
+    return () => clearInterval(t);
+  }, [unlocked]);
+
+  if (!unlocked) return <Gate onUnlock={unlock} booting={booting} />;
+  if (!data) return <Center>Loading the clubhouse…</Center>;
+
+  const rooms = [
+    { id: "couch", label: "🛋️ The Couch" },
+    { id: "roster", label: "🎭 Roster" },
+    { id: "quotes", label: "💬 Quote Wall" },
+    { id: "memories", label: "📸 Memory Lane" },
+    { id: "bucket", label: "🪣 Bucket List" },
+    { id: "wheel", label: "🎡 Spin Wheel" },
+    { id: "polls", label: "🗳️ Beef & Polls" },
+    { id: "hangout", label: "📅 Next Hangout" },
+  ];
+
+  return (
+    <div className="min-h-screen text-stone-800">
+      <header className="sticky top-0 z-20 bg-gradient-to-r from-rose-500 via-orange-500 to-amber-500 shadow-lg">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🎉</span>
+            <h1 className="text-white font-black text-xl tracking-tight">{GROUP_NAME}</h1>
+            <span className="hidden sm:inline text-amber-100 text-xs font-semibold bg-black/20 px-2 py-0.5 rounded-full">clubhouse</span>
+          </div>
+          <div className="text-white text-xs font-bold bg-black/20 px-2.5 py-1 rounded-full">👥 9</div>
+        </div>
+        <nav className="max-w-3xl mx-auto px-2 pb-2 flex gap-1 overflow-x-auto">
+          {rooms.map((r) => (
+            <button key={r.id} onClick={() => setRoom(r.id)}
+              className={"whitespace-nowrap px-3 py-1.5 rounded-full text-sm font-bold transition " + (room === r.id ? "bg-white text-rose-600 shadow" : "text-white hover:bg-white/20")}>
+              {r.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6 pb-24">
+        {room === "couch" && <Couch data={data} refresh={refresh} />}
+        {room === "roster" && <Roster data={data} refresh={refresh} />}
+        {room === "quotes" && <Quotes data={data} refresh={refresh} />}
+        {room === "memories" && <Memories data={data} refresh={refresh} />}
+        {room === "bucket" && <BucketList data={data} refresh={refresh} />}
+        {room === "wheel" && <Wheel data={data} refresh={refresh} />}
+        {room === "polls" && <Polls data={data} refresh={refresh} />}
+        {room === "hangout" && <Hangout data={data} refresh={refresh} />}
+      </main>
+
+      <footer className="fixed bottom-0 inset-x-0 bg-amber-100/90 backdrop-blur border-t border-amber-200 py-2 text-center text-xs text-stone-500">
+        members only · shared live with all 9 · don't leak the passcode 🤫
+      </footer>
+    </div>
+  );
+}
+
+function Center({ children }) {
+  return <div className="min-h-screen flex items-center justify-center text-stone-500 font-bold">{children}</div>;
+}
+
+// ---------------- GATE ----------------
+function Gate({ onUnlock, booting }) {
+  const [code, setCode] = useState("");
+  const [msg, setMsg] = useState("");
+  const [shake, setShake] = useState(false);
+  function tryEnter() {
+    if (code.trim() === PASSCODE) onUnlock();
+    else { setMsg(REJECTIONS[Math.floor(Math.random() * REJECTIONS.length)]); setShake(true); setTimeout(() => setShake(false), 500); }
+  }
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-stone-900 via-rose-950 to-orange-950 px-4">
+      <div className="w-full max-w-md bg-stone-800/80 backdrop-blur border border-stone-700 rounded-3xl p-7 shadow-2xl" style={shake ? { animation: "wobble 0.4s" } : {}}>
+        <div className="flex justify-center mb-4"><div className="bg-gradient-to-br from-rose-500 to-orange-500 p-4 rounded-2xl shadow-lg text-3xl">🔒</div></div>
+        <h1 className="text-center text-3xl font-black text-white tracking-tight">{GROUP_NAME}</h1>
+        <p className="text-center text-stone-400 text-sm mt-1 mb-6">Members only. Prove you belong.</p>
+        <input type="password" value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => e.key === "Enter" && tryEnter()}
+          placeholder="Enter the secret passcode"
+          className="w-full bg-stone-900 border border-stone-600 rounded-xl px-4 py-3 text-white placeholder-stone-500 focus:outline-none focus:border-rose-500" />
+        {msg && <p className="text-rose-400 text-sm font-semibold mt-3 text-center">{msg}</p>}
+        <button onClick={tryEnter} disabled={booting}
+          className="w-full mt-5 bg-gradient-to-r from-rose-500 to-orange-500 hover:from-rose-400 hover:to-orange-400 text-white font-black py-3 rounded-xl shadow-lg transition disabled:opacity-60">
+          {booting ? "Opening the door…" : "Let me in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------- COUCH ----------------
+function Couch({ data, refresh }) {
+  const { currentChaos, chaosArchive } = data;
+  const [spinning, setSpinning] = useState(false);
+  const [display, setDisplay] = useState(currentChaos ? currentChaos.prompt : null);
+  const [who, setWho] = useState(getName());
+  const [ans, setAns] = useState("");
+
+  useEffect(() => { if (!spinning) setDisplay(currentChaos ? currentChaos.prompt : null); }, [currentChaos && currentChaos.id]);
+
+  function fireChaos() {
+    setSpinning(true);
+    let count = 0;
+    const t = setInterval(async () => {
+      setDisplay(CHAOS[Math.floor(Math.random() * CHAOS.length)]);
+      count++;
+      if (count > 8) {
+        clearInterval(t);
+        const finalPrompt = CHAOS[Math.floor(Math.random() * CHAOS.length)];
+        setDisplay(finalPrompt);
+        setSpinning(false);
+        await sb.rpc("fire_chaos", { new_prompt: finalPrompt });
+        refresh();
+      }
+    }, 70);
+  }
+  async function answer() {
+    if (!currentChaos || !who.trim() || !ans.trim()) return;
+    rememberName(who.trim());
+    await sb.from("chaos_answers").insert({ round_id: currentChaos.id, who: who.trim(), text: ans.trim() });
+    setAns(""); refresh();
+  }
+
+  const shown = spinning ? display : (currentChaos ? currentChaos.prompt : null);
+
+  return (
+    <div>
+      <div className="bg-white rounded-3xl p-6 shadow-sm border border-amber-100 mb-6">
+        <h2 className="text-2xl font-black flex items-center gap-2">Welcome back to the couch 🛋️</h2>
+        <p className="text-stone-500 mt-1">The whole gang lives here. Now press the cursed button.</p>
+      </div>
+      <div className="text-center">
+        <button onClick={fireChaos} className="inline-flex flex-col items-center justify-center bg-gradient-to-br from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white rounded-full w-44 h-44 shadow-2xl active:scale-95 transition">
+          <span className={"text-5xl " + (spinning ? "animate-spin" : "")}>⚡</span>
+          <span className="font-black text-lg mt-2 leading-tight">CHAOS<br/>BUTTON</span>
+        </button>
+        <p className="text-stone-400 text-xs mt-3">summon a random prompt — then everyone answers</p>
+      </div>
+
+      {shown && (
+        <div className="mt-7 bg-gradient-to-br from-amber-100 to-orange-100 border-2 border-dashed border-orange-300 rounded-2xl p-6 shadow-sm">
+          <div className="text-orange-600 font-bold text-sm mb-2">✨ CURRENT CHAOS</div>
+          <p className="text-stone-800 text-lg font-semibold leading-snug">{shown}</p>
+          {currentChaos && !spinning && (
+            <div>
+              <div className="mt-5 bg-white rounded-xl p-3 border border-orange-200">
+                <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2" placeholder="Your name" value={who} onChange={(e) => setWho(e.target.value)} />
+                <div className="flex gap-2">
+                  <input className="flex-1 border border-stone-300 rounded-lg px-3 py-2" placeholder="Your answer…" value={ans} onChange={(e) => setAns(e.target.value)} onKeyDown={(e) => e.key === "Enter" && answer()} />
+                  <button onClick={answer} className="bg-rose-500 text-white font-bold px-4 rounded-lg">Answer</button>
+                </div>
+              </div>
+              {currentChaos.answers.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  {currentChaos.answers.map((a) => (
+                    <div key={a.id} className="bg-white rounded-xl px-4 py-2.5 shadow-sm border border-amber-100">
+                      <span className="font-black text-rose-600">{a.who}: </span><span className="text-stone-700">{a.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <p className="text-xs text-stone-500 mt-3 text-center">{currentChaos.answers.length} answer{currentChaos.answers.length !== 1 ? "s" : ""} · firing a new chaos archives this one</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {chaosArchive.length > 0 && (
+        <div className="mt-8">
+          <h3 className="text-stone-400 font-black text-sm uppercase tracking-wide mb-3">Past chaos</h3>
+          <div className="space-y-3">
+            {chaosArchive.map((c) => (
+              <div key={c.id} className="bg-white/60 rounded-xl p-4 border border-stone-200">
+                <p className="text-stone-500 text-sm font-semibold mb-2">{c.prompt}</p>
+                <div className="space-y-1">{c.answers.map((a) => (<p key={a.id} className="text-sm text-stone-600"><span className="font-bold text-stone-700">{a.who}:</span> {a.text}</p>))}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- ROSTER ----------------
+function Roster({ data, refresh }) {
+  const [flipped, setFlipped] = useState({});
+  const [editing, setEditing] = useState(null);
+  async function update(m) {
+    await sb.from("roster").update({ name: m.name, emoji: m.emoji, title: m.title, fact: m.fact }).eq("id", m.id);
+    setEditing(null); refresh();
+  }
+  return (
+    <div>
+      <SectionTitle emoji="🎭" title="The Roster" sub="9 legends. Tap a card to flip it. Anyone can edit." />
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {data.roster.map((m) => (
+          <div key={m.id} className="relative h-44 cursor-pointer" onClick={() => setFlipped((f) => ({ ...f, [m.id]: !f[m.id] }))}>
+            <div className="absolute inset-0 rounded-2xl shadow-sm border border-amber-100 bg-white p-3 flex flex-col items-center justify-center text-center" style={{ display: flipped[m.id] ? "none" : "flex" }}>
+              <div className="text-4xl mb-1">{m.emoji}</div>
+              <div className="font-black leading-tight">{m.name}</div>
+              <div className="text-xs text-rose-500 font-semibold mt-0.5">{m.title}</div>
+            </div>
+            <div className="absolute inset-0 rounded-2xl shadow-sm border border-rose-100 bg-gradient-to-br from-rose-50 to-amber-50 p-3 flex flex-col items-center justify-center text-center" style={{ display: flipped[m.id] ? "flex" : "none" }}>
+              <p className="text-sm text-stone-700 leading-snug">{m.fact}</p>
+              <button onClick={(e) => { e.stopPropagation(); setEditing(m); }} className="mt-2 text-xs font-bold text-rose-600 bg-white px-2.5 py-1 rounded-full shadow-sm">edit</button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {editing && <EditMember member={editing} onSave={update} onCancel={() => setEditing(null)} />}
+    </div>
+  );
+}
+function EditMember({ member, onSave, onCancel }) {
+  const [m, setM] = useState(member);
+  return (
+    <Modal onClose={onCancel} title="Edit member">
+      <Label>Name</Label>
+      <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-3" value={m.name} onChange={(e) => setM({ ...m, name: e.target.value })} />
+      <Label>Title / role</Label>
+      <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-3" value={m.title} onChange={(e) => setM({ ...m, title: e.target.value })} />
+      <Label>Fun fact</Label>
+      <textarea className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-3" rows={2} value={m.fact} onChange={(e) => setM({ ...m, fact: e.target.value })} />
+      <Label>Avatar</Label>
+      <div className="flex flex-wrap gap-1.5 mb-4">
+        {EMOJIS.map((e) => (<button key={e} onClick={() => setM({ ...m, emoji: e })} className={"text-2xl w-10 h-10 rounded-lg " + (m.emoji === e ? "bg-rose-100 ring-2 ring-rose-400" : "hover:bg-stone-100")}>{e}</button>))}
+      </div>
+      <div className="flex gap-2">
+        <button onClick={() => onSave(m)} className="flex-1 bg-rose-500 text-white font-bold py-2 rounded-lg">Save</button>
+        <button onClick={onCancel} className="px-4 bg-stone-100 text-stone-600 font-bold py-2 rounded-lg">Cancel</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------- QUOTES ----------------
+function Quotes({ data, refresh }) {
+  const [text, setText] = useState("");
+  const [who, setWho] = useState("");
+  async function add() {
+    if (!text.trim() || !who.trim()) return;
+    await sb.from("quotes").insert({ text: text.trim(), who: who.trim(), color: Math.floor(Math.random() * 6), rot: Math.random() * 6 - 3 });
+    setText(""); setWho(""); refresh();
+  }
+  async function del(id) { await sb.from("quotes").delete().eq("id", id); refresh(); }
+  return (
+    <div>
+      <SectionTitle emoji="💬" title="Quote Wall" sub="The hall of fame for cursed things people said." />
+      <div className="bg-white rounded-2xl p-4 shadow-sm border border-amber-100 mb-6">
+        <textarea className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2" rows={2} placeholder='"The exact cursed thing they said"' value={text} onChange={(e) => setText(e.target.value)} />
+        <div className="flex gap-2">
+          <input className="flex-1 border border-stone-300 rounded-lg px-3 py-2" placeholder="— who said it" value={who} onChange={(e) => setWho(e.target.value)} />
+          <button onClick={add} className="bg-rose-500 text-white font-bold px-4 rounded-lg">Pin</button>
+        </div>
+      </div>
+      {data.quotes.length === 0 ? <Empty text="No quotes yet. Someone say something stupid." /> : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {data.quotes.map((q) => (
+            <div key={q.id} className={"relative p-4 rounded-sm shadow-md " + QCOLORS[q.color]} style={{ transform: "rotate(" + q.rot + "deg)" }}>
+              <button onClick={() => del(q.id)} className="absolute top-1.5 right-2 text-stone-400 hover:text-red-500 font-bold">✕</button>
+              <p className="text-stone-800 font-medium leading-snug">“{q.text}”</p>
+              <p className="text-right text-sm font-bold text-stone-600 mt-2">— {q.who}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- MEMORIES ----------------
+function Memories({ data, refresh }) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [date, setDate] = useState("");
+  async function add() {
+    if (!title.trim()) return;
+    await sb.from("memories").insert({ title: title.trim(), body: body.trim(), mdate: date || new Date().toISOString().slice(0, 10) });
+    setTitle(""); setBody(""); setDate(""); refresh();
+  }
+  async function del(id) { await sb.from("memories").delete().eq("id", id); refresh(); }
+  return (
+    <div>
+      <SectionTitle emoji="📸" title="Memory Lane" sub="The cozy scrapbook. Newest moments on top." />
+      <div className="bg-white rounded-2xl p-4 shadow-sm border border-amber-100 mb-6">
+        <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2" placeholder="Memory title (e.g. The legendary camping trip)" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <textarea className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2" rows={3} placeholder="What happened? Tell the story…" value={body} onChange={(e) => setBody(e.target.value)} />
+        <div className="flex gap-2">
+          <input type="date" className="flex-1 border border-stone-300 rounded-lg px-3 py-2" value={date} onChange={(e) => setDate(e.target.value)} />
+          <button onClick={add} className="bg-amber-600 text-white font-bold px-4 rounded-lg">Add</button>
+        </div>
+      </div>
+      {data.memories.length === 0 ? <Empty text="The scrapbook is empty. Make a core memory." /> : (
+        <div className="space-y-4">
+          {data.memories.map((m) => (
+            <div key={m.id} className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-5 shadow-sm relative">
+              <button onClick={() => del(m.id)} className="absolute top-3 right-3 text-stone-400 hover:text-red-500 font-bold">✕</button>
+              <div className="text-amber-700 text-xs font-bold mb-1">❤️ {m.mdate}</div>
+              <h3 className="font-black text-lg">{m.title}</h3>
+              {m.body && <p className="text-stone-600 mt-1 leading-relaxed whitespace-pre-wrap">{m.body}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- BUCKET LIST ----------------
+function BucketList({ data, refresh }) {
+  const [text, setText] = useState("");
+  const [who, setWho] = useState(getName());
+  async function add() {
+    if (!text.trim()) return;
+    if (who.trim()) rememberName(who.trim());
+    await sb.from("bucket").insert({ text: text.trim(), who: who.trim(), done: false });
+    setText(""); refresh();
+  }
+  async function toggle(b) { await sb.from("bucket").update({ done: !b.done }).eq("id", b.id); refresh(); }
+  async function del(id) { await sb.from("bucket").delete().eq("id", id); refresh(); }
+  const done = data.bucket.filter((b) => b.done).length;
+  const pct = data.bucket.length ? Math.round((done / data.bucket.length) * 100) : 0;
+  const sorted = [...data.bucket].sort((a, b) => (a.done === b.done ? 0 : a.done ? 1 : -1));
+  return (
+    <div>
+      <SectionTitle emoji="🪣" title="Bucket List" sub="Stuff the 9 of us have to do before we die (or graduate)." />
+      {data.bucket.length > 0 && (
+        <div className="bg-white rounded-2xl p-4 shadow-sm border border-amber-100 mb-5">
+          <div className="flex justify-between text-sm font-bold text-stone-600 mb-2"><span>{done} of {data.bucket.length} done</span><span className="text-emerald-600">{pct}%</span></div>
+          <div className="h-3 bg-stone-100 rounded-full overflow-hidden"><div className="h-full bg-gradient-to-r from-emerald-400 to-teal-500 transition-all" style={{ width: pct + "%" }} /></div>
+        </div>
+      )}
+      <div className="bg-white rounded-2xl p-4 shadow-sm border border-amber-100 mb-6">
+        <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2" placeholder="Something we must do together…" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
+        <div className="flex gap-2">
+          <input className="flex-1 border border-stone-300 rounded-lg px-3 py-2" placeholder="added by (optional)" value={who} onChange={(e) => setWho(e.target.value)} />
+          <button onClick={add} className="bg-emerald-600 text-white font-bold px-4 rounded-lg">Add</button>
+        </div>
+      </div>
+      {data.bucket.length === 0 ? <Empty text="Empty bucket. Dream bigger." /> : (
+        <div className="space-y-2">
+          {sorted.map((b) => (
+            <div key={b.id} className={"flex items-center gap-3 rounded-xl px-4 py-3 shadow-sm border transition " + (b.done ? "bg-emerald-50 border-emerald-200" : "bg-white border-amber-100")}>
+              <button onClick={() => toggle(b)} className="shrink-0 text-2xl leading-none">{b.done ? "✅" : "⭕"}</button>
+              <div className="flex-1 min-w-0">
+                <p className={"font-semibold leading-snug " + (b.done ? "line-through text-stone-400" : "text-stone-800")}>{b.text}</p>
+                {b.who && <p className="text-xs text-stone-400">added by {b.who}</p>}
+              </div>
+              <button onClick={() => del(b.id)} className="text-stone-300 hover:text-red-500 shrink-0 font-bold">✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- WHEEL ----------------
+function Wheel({ data, refresh }) {
+  const [mode, setMode] = useState("members");
+  const [rotation, setRotation] = useState(0);
+  const [spinning, setSpinning] = useState(false);
+  const [result, setResult] = useState(null);
+  const [newOpt, setNewOpt] = useState("");
+
+  const options = mode === "members" ? data.roster.map((m) => m.name) : data.wheelOptions.map((w) => w.label);
+
+  async function addOpt() {
+    if (!newOpt.trim()) return;
+    await sb.from("wheel_options").insert({ label: newOpt.trim(), ord: data.wheelOptions.length });
+    setNewOpt(""); refresh();
+  }
+  async function delOpt(id) { await sb.from("wheel_options").delete().eq("id", id); refresh(); }
+
+  function spin() {
+    if (spinning || options.length < 2) return;
+    setResult(null); setSpinning(true);
+    const n = options.length, seg = 360 / n;
+    const winner = Math.floor(Math.random() * n);
+    const target = 360 - (winner * seg + seg / 2);
+    const current = ((rotation % 360) + 360) % 360;
+    const delta = (target - current + 360) % 360;
+    setRotation(rotation + 360 * 5 + delta);
+    setTimeout(() => { setSpinning(false); setResult(options[winner]); }, 4600);
+  }
+
+  const n = options.length, seg = 360 / n, cx = 150, cy = 150, r = 140;
+  const pt = (angle, rad) => { const a = (angle * Math.PI) / 180; return [cx + rad * Math.sin(a), cy - rad * Math.cos(a)]; };
+  const slices = options.map((o, i) => {
+    const a0 = i * seg, a1 = (i + 1) * seg;
+    const p0 = pt(a0, r), p1 = pt(a1, r), lp = pt(a0 + seg / 2, r * 0.62);
+    const large = seg > 180 ? 1 : 0;
+    return { d: "M" + cx + " " + cy + " L" + p0[0] + " " + p0[1] + " A" + r + " " + r + " 0 " + large + " 1 " + p1[0] + " " + p1[1] + " Z", lx: lp[0], ly: lp[1], mid: a0 + seg / 2, color: WHEEL_COLORS[i % WHEEL_COLORS.length], label: o };
+  });
+
+  return (
+    <div>
+      <SectionTitle emoji="🎡" title="Spin the Wheel" sub="Let fate decide. No more 'I don't know, where do YOU want to eat?'" />
+      <div className="flex gap-2 mb-5">
+        <button onClick={() => { setMode("members"); setResult(null); }} className={"flex-1 py-2.5 rounded-xl font-bold transition " + (mode === "members" ? "bg-rose-500 text-white shadow" : "bg-white text-stone-600 border border-stone-200")}>Pick a member</button>
+        <button onClick={() => { setMode("custom"); setResult(null); }} className={"flex-1 py-2.5 rounded-xl font-bold transition " + (mode === "custom" ? "bg-rose-500 text-white shadow" : "bg-white text-stone-600 border border-stone-200")}>Custom list</button>
+      </div>
+      {options.length < 2 ? <Empty text="Add at least 2 options to spin." /> : (
+        <div className="flex flex-col items-center">
+          <div className="relative">
+            <div className="absolute left-1/2 z-10" style={{ transform: "translateX(-50%)", top: "-2px", filter: "drop-shadow(0 2px 2px rgba(0,0,0,0.3))" }}>
+              <svg width="34" height="34" viewBox="0 0 34 34"><polygon points="17,32 4,4 30,4" fill="#1c1917" /></svg>
+            </div>
+            <svg width="300" height="300" viewBox="0 0 300 300">
+              <circle cx={cx} cy={cy} r={r + 6} fill="#1c1917" />
+              <g style={{ transition: spinning ? "transform 4.5s cubic-bezier(0.16,0.84,0.22,1)" : "none", transform: "rotate(" + rotation + "deg)", transformOrigin: "150px 150px" }}>
+                {slices.map((s, i) => (
+                  <g key={i}>
+                    <path d={s.d} fill={s.color} stroke="#fff" strokeWidth="2" />
+                    <text x={s.lx} y={s.ly} fontSize={n > 7 ? 11 : 14} fontWeight="800" fill="#1c1917" textAnchor="middle" dominantBaseline="middle" transform={"rotate(" + s.mid + " " + s.lx + " " + s.ly + ")"}>
+                      {s.label.length > 9 ? s.label.slice(0, 8) + "…" : s.label}
+                    </text>
+                  </g>
+                ))}
+              </g>
+              <circle cx={cx} cy={cy} r="20" fill="#fff" stroke="#1c1917" strokeWidth="3" />
+            </svg>
+          </div>
+          <button onClick={spin} disabled={spinning} className="mt-5 bg-gradient-to-r from-rose-500 to-orange-500 hover:from-rose-400 hover:to-orange-400 text-white font-black text-lg px-10 py-3 rounded-full shadow-lg active:scale-95 transition disabled:opacity-60">{spinning ? "Spinning…" : "SPIN"}</button>
+          {result && !spinning && (
+            <div className="mt-5 bg-gradient-to-br from-amber-100 to-orange-100 border-2 border-orange-300 rounded-2xl px-8 py-5 text-center shadow-sm">
+              <p className="text-orange-600 font-bold text-sm uppercase tracking-wide">The wheel has spoken</p>
+              <p className="text-3xl font-black mt-1">👉 {result}</p>
+            </div>
+          )}
+        </div>
+      )}
+      {mode === "custom" && (
+        <div className="mt-7">
+          <h3 className="text-stone-400 font-black text-sm uppercase tracking-wide mb-3">Wheel options (shared)</h3>
+          <div className="flex gap-2 mb-3">
+            <input className="flex-1 border border-stone-300 rounded-lg px-3 py-2" placeholder="Add an option…" value={newOpt} onChange={(e) => setNewOpt(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addOpt()} />
+            <button onClick={addOpt} className="bg-rose-500 text-white font-bold px-4 rounded-lg">Add</button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {data.wheelOptions.map((o) => (
+              <span key={o.id} className="flex items-center gap-1.5 bg-white border border-amber-100 rounded-full pl-3 pr-2 py-1.5 text-sm font-semibold text-stone-700 shadow-sm">{o.label}<button onClick={() => delOpt(o.id)} className="text-stone-300 hover:text-red-500 font-bold">✕</button></span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- POLLS ----------------
+function Polls({ data, refresh }) {
+  const [q, setQ] = useState("");
+  const [opts, setOpts] = useState(["", ""]);
+  const [voted, setVoted] = useState(() => { try { return JSON.parse(localStorage.getItem("dombrud_voted") || "{}"); } catch (e) { return {}; } });
+
+  async function addPoll() {
+    const clean = opts.map((o) => o.trim()).filter(Boolean);
+    if (!q.trim() || clean.length < 2) return;
+    const res = await sb.from("polls").insert({ q: q.trim() }).select().single();
+    if (res.data) {
+      await sb.from("poll_options").insert(clean.map((label, i) => ({ poll_id: res.data.id, label, ord: i })));
+    }
+    setQ(""); setOpts(["", ""]); refresh();
+  }
+  async function vote(pollId, optId) {
+    if (voted[pollId]) return;
+    await sb.rpc("increment_vote", { opt_id: optId });
+    const v = { ...voted, [pollId]: optId };
+    setVoted(v); try { localStorage.setItem("dombrud_voted", JSON.stringify(v)); } catch (e) {}
+    refresh();
+  }
+  async function del(id) { await sb.from("polls").delete().eq("id", id); refresh(); }
+
+  return (
+    <div>
+      <SectionTitle emoji="🗳️" title="Beef & Polls" sub="Settle disputes democratically. Or pettily." />
+      <div className="bg-white rounded-2xl p-4 shadow-sm border border-amber-100 mb-6">
+        <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2 font-semibold" placeholder="Ask the group something…" value={q} onChange={(e) => setQ(e.target.value)} />
+        {opts.map((o, i) => (<input key={i} className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-2" placeholder={"Option " + (i + 1)} value={o} onChange={(e) => setOpts(opts.map((x, j) => j === i ? e.target.value : x))} />))}
+        <div className="flex gap-2">
+          {opts.length < 5 && <button onClick={() => setOpts([...opts, ""])} className="text-sm font-bold text-stone-500 px-3 py-2">+ option</button>}
+          <button onClick={addPoll} className="ml-auto bg-rose-500 text-white font-bold px-4 py-2 rounded-lg">Post poll</button>
+        </div>
+      </div>
+      {data.polls.length === 0 ? <Empty text="No beef yet. Start something." /> : (
+        <div className="space-y-4">
+          {data.polls.map((p) => {
+            const total = p.options.reduce((s, o) => s + o.votes, 0);
+            const myVote = voted[p.id];
+            return (
+              <div key={p.id} className="bg-white border border-amber-100 rounded-2xl p-5 shadow-sm relative">
+                <button onClick={() => del(p.id)} className="absolute top-4 right-4 text-stone-400 hover:text-red-500 font-bold">✕</button>
+                <h3 className="font-black pr-6 mb-3">{p.q}</h3>
+                <div className="space-y-2">
+                  {p.options.map((o) => {
+                    const pct = total ? Math.round((o.votes / total) * 100) : 0;
+                    const mine = myVote === o.id;
+                    return (
+                      <button key={o.id} onClick={() => vote(p.id, o.id)} disabled={!!myVote} className={"w-full text-left relative overflow-hidden rounded-lg border " + (mine ? "border-rose-400" : "border-stone-200") + (myVote ? " cursor-default" : " hover:border-rose-300")}>
+                        <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-rose-200 to-orange-200 transition-all" style={{ width: (myVote ? pct : 0) + "%" }} />
+                        <div className="relative flex justify-between items-center px-3 py-2"><span className="font-semibold text-stone-700">{o.label} {mine ? "✓" : ""}</span>{myVote && <span className="text-sm font-bold text-stone-500">{pct}% · {o.votes}</span>}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-stone-400 mt-2">{total} vote{total !== 1 ? "s" : ""}{myVote ? "" : " · tap to vote"}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- HANGOUT ----------------
+function Hangout({ data, refresh }) {
+  const h = data.hangout;
+  const [edit, setEdit] = useState(false);
+  const [draft, setDraft] = useState(h);
+  const [, force] = useState(0);
+  useEffect(() => { const t = setInterval(() => force((n) => n + 1), 1000); return () => clearInterval(t); }, []);
+  async function saveH() { await sb.from("hangout").update({ what: draft.what, when_at: draft.when, where_at: draft.where }).eq("id", 1); setEdit(false); refresh(); }
+  const countdown = (() => {
+    if (!h.when) return null;
+    const diff = new Date(h.when).getTime() - Date.now();
+    if (isNaN(diff)) return null;
+    if (diff <= 0) return "IT'S HAPPENING (or already happened) 🎉";
+    const d = Math.floor(diff / 86400000), hh = Math.floor((diff % 86400000) / 3600000), m = Math.floor((diff % 3600000) / 60000), s = Math.floor((diff % 60000) / 1000);
+    return d + "d " + hh + "h " + m + "m " + s + "s";
+  })();
+  return (
+    <div>
+      <SectionTitle emoji="📅" title="Next Hangout" sub="One plan to rule them all. Anyone can update it." />
+      {!edit ? (
+        <div className="bg-gradient-to-br from-rose-500 to-orange-500 rounded-3xl p-7 text-white shadow-lg text-center">
+          {h.what ? (
+            <div>
+              <p className="text-amber-100 text-sm font-bold uppercase tracking-wide">Coming up</p>
+              <h2 className="text-3xl font-black mt-1">{h.what}</h2>
+              <p className="text-amber-50 mt-2">{h.where && "📍 " + h.where}</p>
+              {h.when && <p className="text-amber-50">🕐 {new Date(h.when).toLocaleString()}</p>}
+              {countdown && (<div className="mt-5 bg-black/20 rounded-2xl py-4"><p className="text-xs text-amber-100 font-bold uppercase">Countdown</p><p className="text-2xl font-black tracking-tight mt-1">{countdown}</p></div>)}
+            </div>
+          ) : (<p className="text-xl font-bold py-6">No hangout planned. Someone be the hero. 🦸</p>)}
+          <button onClick={() => { setDraft(h); setEdit(true); }} className="mt-6 bg-white text-rose-600 font-black px-6 py-2.5 rounded-full shadow">{h.what ? "Update the plan" : "Plan something"}</button>
+        </div>
+      ) : (
+        <div className="bg-white rounded-3xl p-6 shadow-sm border border-amber-100">
+          <Label>What are we doing?</Label>
+          <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-3" value={draft.what} onChange={(e) => setDraft({ ...draft, what: e.target.value })} placeholder="e.g. Khuushuur night + bad movies" />
+          <Label>When?</Label>
+          <input type="datetime-local" className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-3" value={draft.when} onChange={(e) => setDraft({ ...draft, when: e.target.value })} />
+          <Label>Where?</Label>
+          <input className="w-full border border-stone-300 rounded-lg px-3 py-2 mb-4" value={draft.where} onChange={(e) => setDraft({ ...draft, where: e.target.value })} placeholder="e.g. Bataa's place" />
+          <div className="flex gap-2"><button onClick={saveH} className="flex-1 bg-rose-500 text-white font-bold py-2.5 rounded-lg">Save plan</button><button onClick={() => setEdit(false)} className="px-4 bg-stone-100 text-stone-600 font-bold py-2.5 rounded-lg">Cancel</button></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- shared bits ----------------
+function SectionTitle({ emoji, title, sub }) {
+  return (<div className="mb-5"><h2 className="text-2xl font-black flex items-center gap-2">{emoji} {title}</h2><p className="text-stone-500 text-sm mt-0.5">{sub}</p></div>);
+}
+function Empty({ text }) { return <div className="text-center text-stone-400 py-12 font-semibold">{text}</div>; }
+function Label({ children }) { return <label className="block text-xs font-bold text-stone-500 mb-1">{children}</label>; }
+function Modal({ children, onClose, title }) {
+  return (<div className="fixed inset-0 z-30 bg-black/40 flex items-end sm:items-center justify-center p-4" onClick={onClose}><div className="bg-white rounded-2xl p-5 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}><h3 className="font-black text-lg mb-4">{title}</h3>{children}</div></div>);
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
